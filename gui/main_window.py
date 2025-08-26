@@ -16,8 +16,9 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QFileDialog,
     QApplication,
+    QShortcut,
 )
-from PyQt5.QtGui import QPainter, QColor, QPixmap
+from PyQt5.QtGui import QPainter, QColor, QPixmap, QKeySequence
 from PIL import Image
 
 from models import Region
@@ -32,6 +33,7 @@ class DotDrawerApp(QWidget):
         super().__init__()
         self.setWindowTitle("Dot Drawer")
         self.setMinimumSize(1000, 600)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.selected_region: Optional[Region] = None
         self.uploaded_images: List[Tuple[str, Image.Image]] = []
@@ -40,7 +42,21 @@ class DotDrawerApp(QWidget):
         self._draw_thread: Optional[DrawingThread] = None
 
         self._setup_ui()
+        self._setup_shortcuts()
         self._update_dot_preview()
+
+    def _setup_shortcuts(self):
+        print("Setting up F7 shortcut")
+
+        self.f7_shortcut = QShortcut(QKeySequence("F7"), self)
+        self.f7_shortcut.activated.connect(self._cancel_drawing)
+        self.f7_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        print(f"F7 shortcut created: {self.f7_shortcut.key().toString()}")
+
+        self.f7_shortcut2 = QShortcut(QKeySequence(Qt.Key.Key_F7), self)
+        self.f7_shortcut2.activated.connect(self._cancel_drawing)
+        self.f7_shortcut2.setContext(Qt.ShortcutContext.WindowShortcut)
+        print(f"F7 shortcut2 created: {self.f7_shortcut2.key().toString()}")
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -133,8 +149,22 @@ class DotDrawerApp(QWidget):
 
     def keyPressEvent(self, a0):
         event = a0
+        print(f"Key pressed: {event.key()}, F7 = {Qt.Key.Key_F7}")
         if event.key() == Qt.Key.Key_F7:
+            print("F7 detected in keyPressEvent")
             self._cancel_drawing()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def focusInEvent(self, a0):
+        super().focusInEvent(a0)
+
+    def showEvent(self, a0):
+        super().showEvent(a0)
+        self.setFocus()
+        self.activateWindow()
+        self.raise_()
 
     def _generate_live_preview(self, img: Image.Image) -> QPixmap:
         try:
@@ -237,6 +267,7 @@ class DotDrawerApp(QWidget):
         QApplication.processEvents()
         region = RegionSelector.get_region(self)
         self.show()
+        self.setFocus()
         if region:
             self.selected_region = region
             self.region_info_label.setText(
@@ -365,5 +396,8 @@ class DotDrawerApp(QWidget):
         self._draw_thread.start()
 
     def _cancel_drawing(self):
+        print("_cancel_drawing called!")
         self._stop_flag.set()
         self.cancel_draw_btn.setEnabled(False)
+        if self._draw_thread and self._draw_thread.is_alive():
+            self._draw_thread.join(timeout=1.0)
