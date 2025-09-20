@@ -87,6 +87,15 @@ class DotDrawerApp(QWidget):
         controls_col1.addWidget(threshold_label)
         controls_col1.addWidget(self.threshold_slider)
 
+        brightness_label = QLabel("Brightness Offset:")
+        brightness_label.setObjectName("sectionLabel")
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(-100, 100)
+        self.brightness_slider.setValue(0)
+        self.brightness_slider.valueChanged.connect(self._on_settings_changed)
+        controls_col1.addWidget(brightness_label)
+        controls_col1.addWidget(self.brightness_slider)
+
         brush_label = QLabel("Brush size:")
         brush_label.setObjectName("sectionLabel")
         self.brush_spin = QSpinBox()
@@ -228,6 +237,7 @@ class DotDrawerApp(QWidget):
     def _generate_live_preview(self, img: Image.Image) -> QPixmap:
         try:
             threshold = self.threshold_slider.value()
+            brightness_offset = self.brightness_slider.value()
             brush_px = self.brush_spin.value()
 
             target_w, target_h = (
@@ -244,6 +254,7 @@ class DotDrawerApp(QWidget):
                 brush_px,
                 self.color_locations,
                 self.sampled_colors,
+                brightness_offset,
             )
 
             if result is None:
@@ -462,6 +473,7 @@ class DotDrawerApp(QWidget):
 
         brush_px = self.brush_spin.value()
         threshold = self.threshold_slider.value()
+        brightness_offset = self.brightness_slider.value()
 
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
 
@@ -490,6 +502,7 @@ class DotDrawerApp(QWidget):
                 brush_px,
                 self.color_locations,
                 self.sampled_colors,
+                brightness_offset,
             )
 
             bg_color_info = ""
@@ -508,28 +521,26 @@ class DotDrawerApp(QWidget):
 
                     if bg_color in active_colors:
                         bg_rgb = active_colors[bg_color]["rgb"]
-                        bg_color_info = f"\nBackground: {bg_color.title()} RGB{bg_rgb} ({len(bg_dots)} dots - will be skipped)"
-                    else:
-                        bg_color_info = f"\nBackground: {bg_color.title()} ({len(bg_dots)} dots - will be skipped)"
-                else:
-                    bg_color_info = "\nBackground: White (no dots to draw)"
-            else:
-                bg_color_info = "\nBackground: Unable to determine"
-        except Exception as e:
-            print(f"Error determining background color: {e}")
-            bg_color_info = "\nBackground: Unable to determine"
+                        bg_color_info = f"\nBackground color: {bg_color} (RGB{bg_rgb})"
+
+        except Exception:
+            bg_color_info = ""
 
         confirm = QMessageBox.question(
             self,
-            "Confirm Draw",
-            f"Start drawing '{display_name}' in region x={region.x},y={region.y},w={region.w},h={region.h}?\n\n"
-            f"Brush: {brush_px}px, Threshold: {threshold}{color_info}{bg_color_info}\n\n"
-            "This will move your mouse and click. You'll get a 3s countdown to cancel.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            "Confirm Drawing",
+            f"Draw image '{display_name}'?\n\n"
+            f"Region: x={region.x}, y={region.y}, w={region.w}, h={region.h}\n"
+            f"Brush size: {brush_px}\n"
+            f"Threshold: {threshold}\n"
+            f"Brightness offset: {brightness_offset}"
+            f"{color_info}{bg_color_info}",
         )
-        if confirm != QMessageBox.Yes:
+
+        if confirm != QMessageBox.StandardButton.Yes:
             return
+
+        self._stop_flag.clear()
 
         self._draw_thread = DrawingThread(
             img,
@@ -539,5 +550,6 @@ class DotDrawerApp(QWidget):
             self._stop_flag,
             self,
             self.color_locations,
+            brightness_offset,
         )
         self._draw_thread.start()

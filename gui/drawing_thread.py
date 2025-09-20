@@ -4,10 +4,7 @@ import pyautogui
 from PyQt5.QtWidgets import QApplication
 from PIL import Image
 from models import Region, ColorLocation
-from utils import (
-    process_image_for_multicolor_drawing,
-    generate_multicolor_positions_from_dict,
-)
+from utils import process_image_for_multicolor_drawing
 
 
 class DrawingThread(threading.Thread):
@@ -20,6 +17,7 @@ class DrawingThread(threading.Thread):
         stop_flag: threading.Event,
         parent_widget,
         color_locations: dict = None,
+        brightness_offset: int = 0,
     ):
         super().__init__()
         self.img = img.copy()
@@ -29,6 +27,7 @@ class DrawingThread(threading.Thread):
         self.stop_flag = stop_flag
         self.parent_widget = parent_widget
         self.color_locations = color_locations or {}
+        self.brightness_offset = brightness_offset
 
     def _click_color_location(self, color_type: str):
         location = self.color_locations.get(color_type)
@@ -57,6 +56,8 @@ class DrawingThread(threading.Thread):
                 self.threshold,
                 self.brush_px,
                 self.color_locations,
+                None,
+                self.brightness_offset,
             )
 
             if result is None:
@@ -65,9 +66,7 @@ class DrawingThread(threading.Thread):
 
             img_resized, color_dots, active_colors = result
 
-            positions_dict = generate_multicolor_positions_from_dict(
-                color_dots, self.region
-            )
+            positions_dict = color_dots
 
             if not any(positions_dict.values()):
                 QApplication.beep()
@@ -123,7 +122,9 @@ class DrawingThread(threading.Thread):
                         break
 
                     try:
-                        pyautogui.moveTo(sx, sy, duration=0.02)
+                        pyautogui.moveTo(
+                            self.region.x + sx, self.region.y + sy, duration=0.02
+                        )
                         pyautogui.click()
                         dots_drawn += 1
 
