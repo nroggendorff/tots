@@ -4,7 +4,10 @@ import pyautogui
 from PyQt5.QtWidgets import QApplication
 from PIL import Image
 from models import Region, ColorLocation
-from utils import process_image_for_multicolor_drawing, generate_multicolor_positions
+from utils import (
+    process_image_for_multicolor_drawing,
+    generate_multicolor_positions_from_dict,
+)
 
 
 class DrawingThread(threading.Thread):
@@ -30,12 +33,6 @@ class DrawingThread(threading.Thread):
     def _click_color_location(self, color_type: str):
         location = self.color_locations.get(color_type)
 
-        if not location and color_type != "dark":
-            location = self.color_locations.get("dark")
-            print(
-                f"No {color_type} location set, using dark color location as fallback"
-            )
-
         if location:
             try:
                 print(
@@ -49,34 +46,30 @@ class DrawingThread(threading.Thread):
             except Exception as e:
                 print(f"Error clicking {color_type} color location: {e}")
         else:
-            if color_type == "dark":
-                print(
-                    f"No {color_type} color location set, using current drawing color"
-                )
-            else:
-                print(
-                    f"No {color_type} color location set, and no dark fallback available"
-                )
+            print(f"No {color_type} color location set")
 
     def run(self):
         try:
             result = process_image_for_multicolor_drawing(
-                self.img, self.region.w, self.region.h, self.threshold, self.brush_px
+                self.img,
+                self.region.w,
+                self.region.h,
+                self.threshold,
+                self.brush_px,
+                self.color_locations,
             )
 
             if result is None:
                 QApplication.beep()
                 return
 
-            img_resized, dark_dots, medium_dots, light_dots = result
+            img_resized, color_dots, active_colors = result
 
-            dark_positions, medium_positions, light_positions = (
-                generate_multicolor_positions(
-                    dark_dots, medium_dots, light_dots, self.region
-                )
+            positions_dict = generate_multicolor_positions_from_dict(
+                color_dots, self.region
             )
 
-            if not dark_positions and not medium_positions and not light_positions:
+            if not any(positions_dict.values()):
                 QApplication.beep()
                 return
 
@@ -91,14 +84,14 @@ class DrawingThread(threading.Thread):
             pyautogui.PAUSE = 0.01
             pyautogui.FAILSAFE = True
 
-            drawing_stages = []
+            drawing_stages = [
+                (color_name, positions)
+                for color_name, positions in positions_dict.items()
+                if positions
+            ]
 
-            if dark_positions:
-                drawing_stages.append(("dark", dark_positions))
-            if medium_positions:
-                drawing_stages.append(("medium", medium_positions))
-            if light_positions:
-                drawing_stages.append(("light", light_positions))
+            bg_color = None
+            bg_positions = []
             if drawing_stages:
                 most_common_stage = max(drawing_stages, key=lambda s: len(s[1]))
                 bg_color, bg_positions = most_common_stage

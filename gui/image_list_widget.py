@@ -24,7 +24,12 @@ from PyQt5.QtGui import QPainter, QColor, QPixmap, QKeySequence
 from PIL import Image
 
 from models import Region, ColorLocation
-from utils import pil_to_qpixmap, process_image_for_multicolor_drawing
+from utils import (
+    pil_to_qpixmap,
+    process_image_for_multicolor_drawing,
+    sample_color_at_location,
+    rgb_to_luminance,
+)
 from gui.region_selector import RegionSelector
 from gui.location_picker import LocationPicker
 from gui.drawing_thread import DrawingThread
@@ -75,25 +80,13 @@ class ImageListWidget(QWidget):
         self.setLayout(layout)
 
     def update_preview(self, preview_pixmap):
-        image = preview_pixmap.toImage()
-
-        for y in range(image.height()):
-            for x in range(image.width()):
-                pixel = image.pixel(x, y)
-                color = QColor(pixel)
-
-                if color.red() > 200 and color.green() < 100 and color.blue() < 100:
-                    image.setPixel(x, y, QColor("white").rgb())
-
-        processed_pixmap = QPixmap.fromImage(image)
-
         white_bg_pixmap = QPixmap(self.preview_label.size())
         white_bg_pixmap.fill(QColor("white"))
 
         painter = QPainter(white_bg_pixmap)
-        x = (white_bg_pixmap.width() - processed_pixmap.width()) // 2
-        y = (white_bg_pixmap.height() - processed_pixmap.height()) // 2
-        painter.drawPixmap(x, y, processed_pixmap)
+        x = (white_bg_pixmap.width() - preview_pixmap.width()) // 2
+        y = (white_bg_pixmap.height() - preview_pixmap.height()) // 2
+        painter.drawPixmap(x, y, preview_pixmap)
         painter.end()
 
         self.preview_label.setPixmap(white_bg_pixmap)
@@ -115,6 +108,7 @@ class DotDrawerApp(QWidget):
         self.uploaded_images: List[Tuple[str, Image.Image]] = []
 
         self.color_locations = {"dark": None, "medium": None, "light": None}
+        self.sampled_colors = {"dark": None, "medium": None, "light": None}
 
         self._stop_flag = threading.Event()
         self._draw_thread: Optional[DrawingThread] = None
@@ -167,18 +161,19 @@ class DotDrawerApp(QWidget):
         controls_col1.addWidget(self.region_info_label)
         color_group = QGroupBox("Color Locations")
         color_layout = QVBoxLayout()
-        self.dark_btn = QPushButton("Set Dark Color Location")
+        self.dark_btn = QPushButton("Set Color 1 (Darkest)")
         self.dark_btn.clicked.connect(lambda: self._pick_color_location("dark"))
         color_layout.addWidget(self.dark_btn)
-        self.medium_btn = QPushButton("Set Medium Color Location")
+        self.medium_btn = QPushButton("Set Color 2 (Medium)")
         self.medium_btn.clicked.connect(lambda: self._pick_color_location("medium"))
         color_layout.addWidget(self.medium_btn)
-        self.light_btn = QPushButton("Set Light Color Location")
+        self.light_btn = QPushButton("Set Color 3 (Lightest)")
         self.light_btn.clicked.connect(lambda: self._pick_color_location("light"))
         color_layout.addWidget(self.light_btn)
-        self.color_status_label = QLabel(
-            "Colors: Dark (default), Medium (default), Light (default)"
-        )
+        clear_btn = QPushButton("Clear All Colors")
+        clear_btn.clicked.connect(self._clear_all_colors)
+        color_layout.addWidget(clear_btn)
+        self.color_status_label = QLabel("No colors selected (will use black on white)")
         self.color_status_label.setStyleSheet(
             "color: #616161; font-size: 11px; margin-top: 4px;"
         )
@@ -221,17 +216,45 @@ class DotDrawerApp(QWidget):
         self.setFocus()
         if location:
             self.color_locations[color_type] = location
+
+            sampled_color = sample_color_at_location(location)
+            if sampled_color:
+                self.sampled_colors[color_type] = sampled_color
+                print(f"Sampled color for {color_type}: {sampled_color}")
+
             self._update_color_status()
+            self._update_all_previews()
+
+    def _clear_all_colors(self):
+        self.color_locations = {"dark": None, "medium": None, "light": None}
+        self.sampled_colors = {"dark": None, "medium": None, "light": None}
+        self._update_color_status()
+        self._update_all_previews()
 
     def _update_color_status(self):
         status_parts = []
+        active_colors = 0
+
         for color_type in ["dark", "medium", "light"]:
             loc = self.color_locations[color_type]
-            if loc:
-                status_parts.append(f"{color_type.title()} ({loc.x},{loc.y})")
-            else:
-                status_parts.append(f"{color_type.title()} (default)")
-        self.color_status_label.setText(f"Colors: {', '.join(status_parts)}")
+            sampled = self.sampled_colors[color_type]
+            if loc and sampled:
+                r, g, b = sampled
+                luminance = rgb_to_luminance(sampled)
+                status_parts.append(
+                    f"{color_type.title()}: RGB({r},{g},{b}) L={luminance:.0f}"
+                )
+                active_colors += 1
+
+        if active_colors == 0:
+            self.color_status_label.setText(
+                "No colors selected (will use black on white)"
+            )
+        else:
+            status_text = f"Selected {active_colors} color(s):\n" + "\n".join(
+                status_parts
+            )
+            self.color_status_label.setText(status_text)
 
     def focusInEvent(self, a0):
         super().focusInEvent(a0)
@@ -252,25 +275,21 @@ class DotDrawerApp(QWidget):
                 else (200, 200)
             )
             result = process_image_for_multicolor_drawing(
-                img, target_w, target_h, threshold, brush_px
+                img,
+                target_w,
+                target_h,
+                threshold,
+                brush_px,
+                self.color_locations,
+                self.sampled_colors,
             )
+
             if result is None:
                 fallback = QPixmap(120, 120)
                 fallback.fill(Qt.GlobalColor.white)
                 return fallback
-            img_resized, dark_dots, medium_dots, light_dots = result
-            stages = []
-            if dark_dots:
-                stages.append(("dark", dark_dots))
-            if medium_dots:
-                stages.append(("medium", medium_dots))
-            if light_dots:
-                stages.append(("light", light_dots))
-            bg_color = None
-            if stages:
-                most_common_stage = max(stages, key=lambda s: len(s[1]))
-                bg_color, bg_dots = most_common_stage
-                stages = [(c, d) for (c, d) in stages if c != bg_color]
+            img_resized, color_dots, active_colors = result
+
             final_w = img_resized.size[0]
             final_h = img_resized.size[1]
             preview_img = Image.new("RGB", (final_w, final_h), (255, 255, 255))
@@ -290,22 +309,30 @@ class DotDrawerApp(QWidget):
                                 ):
                                     preview_img.putpixel((px, py), preview_color)
 
-            for color_type, dots in stages:
-                if color_type == "dark":
-                    draw_dots_with_preview_color(dots, (0, 0, 0))
-                elif color_type == "medium":
-                    draw_dots_with_preview_color(dots, (128, 128, 128))
-                elif color_type == "light":
-                    draw_dots_with_preview_color(dots, (200, 200, 200))
+            stages = [
+                (color_name, dots) for color_name, dots in color_dots.items() if dots
+            ]
+
+            bg_color = None
+            bg_rgb = (255, 255, 255)
+            if stages:
+                most_common_stage = max(stages, key=lambda s: len(s[1]))
+                bg_color, bg_dots = most_common_stage
+                stages = [(c, d) for (c, d) in stages if c != bg_color]
+
+                if bg_color in active_colors:
+                    bg_rgb = active_colors[bg_color]["rgb"]
+
+            for color_name, dots in stages:
+                if color_name in active_colors:
+                    preview_color = active_colors[color_name]["rgb"]
+                else:
+                    preview_color = (0, 0, 0)
+
+                draw_dots_with_preview_color(dots, preview_color)
+
             preview_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
-            if bg_color == "dark":
-                bg_rgb = (0, 0, 0)
-            elif bg_color == "medium":
-                bg_rgb = (128, 128, 128)
-            elif bg_color == "light":
-                bg_rgb = (200, 200, 200)
-            else:
-                bg_rgb = (240, 240, 240)
+
             final_preview = Image.new("RGB", (120, 120), bg_rgb)
             x_offset = (120 - preview_img.width) // 2
             y_offset = (120 - preview_img.height) // 2
@@ -459,34 +486,53 @@ class DotDrawerApp(QWidget):
         brush_px = self.brush_spin.value()
         threshold = self.threshold_slider.value()
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
-        color_info = ""
-        for color_type in ["dark", "medium", "light"]:
-            loc = self.color_locations[color_type]
-            if loc:
-                color_info += f"\n{color_type.title()}: ({loc.x},{loc.y})"
-            else:
-                color_info += f"\n{color_type.title()}: default"
+
+        active_color_count = sum(
+            1 for loc in self.color_locations.values() if loc is not None
+        )
+
+        if active_color_count == 0:
+            color_info = "\nColors: Black on white background (default)"
+        else:
+            color_info = f"\nUsing {active_color_count} selected color(s):"
+            for color_type in ["dark", "medium", "light"]:
+                loc = self.color_locations[color_type]
+                sampled = self.sampled_colors[color_type]
+                if loc and sampled:
+                    r, g, b = sampled
+                    luminance = rgb_to_luminance(sampled)
+                    color_info += f"\n  {color_type.title()}: RGB({r},{g},{b}) L={luminance:.0f} at ({loc.x},{loc.y})"
+
         try:
             result = process_image_for_multicolor_drawing(
-                img, region.w, region.h, threshold, brush_px
+                img,
+                region.w,
+                region.h,
+                threshold,
+                brush_px,
+                self.color_locations,
+                self.sampled_colors,
             )
 
             bg_color_info = ""
             if result is not None:
-                img_resized, dark_dots, medium_dots, light_dots = result
+                img_resized, color_dots, active_colors = result
 
-                stages = []
-                if dark_dots:
-                    stages.append(("dark", dark_dots))
-                if medium_dots:
-                    stages.append(("medium", medium_dots))
-                if light_dots:
-                    stages.append(("light", light_dots))
+                stages = [
+                    (color_name, dots)
+                    for color_name, dots in color_dots.items()
+                    if dots
+                ]
 
                 if stages:
                     most_common_stage = max(stages, key=lambda s: len(s[1]))
                     bg_color, bg_dots = most_common_stage
-                    bg_color_info = f"\nBackground: {bg_color.title()} ({len(bg_dots)} dots - will be skipped)"
+
+                    if bg_color in active_colors:
+                        bg_rgb = active_colors[bg_color]["rgb"]
+                        bg_color_info = f"\nBackground: {bg_color.title()} RGB{bg_rgb} ({len(bg_dots)} dots - will be skipped)"
+                    else:
+                        bg_color_info = f"\nBackground: {bg_color.title()} ({len(bg_dots)} dots - will be skipped)"
                 else:
                     bg_color_info = "\nBackground: White (no dots to draw)"
             else:
