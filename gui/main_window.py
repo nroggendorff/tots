@@ -187,36 +187,38 @@ class DotDrawerApp(QWidget):
 
             img_resized, mask, final_w, final_h = result
 
-            preview_img = Image.new("RGB", (final_w, final_h), (255, 255, 255)[0])
-            dot_radius = max(1, brush_px // 2)
-            step = max(1, brush_px)
+            preview_img = Image.new("RGB", (final_w, final_h), (255, 255, 255))
+            dot_radius = max(1, brush_px // 3)
 
-            for y in range(0, final_h, step):
-                for x in range(0, final_w, step):
-                    if (
-                        y < mask.shape[0]
-                        and x < mask.shape[1]
-                        and mask[min(y, mask.shape[0] - 1), min(x, mask.shape[1] - 1)]
-                    ):
-                        for dy in range(-dot_radius, dot_radius + 1):
-                            for dx in range(-dot_radius, dot_radius + 1):
-                                if dx * dx + dy * dy <= dot_radius * dot_radius:
-                                    px = x + dx
-                                    py = y + dy
-                                    if (
-                                        0 <= px < preview_img.width
-                                        and 0 <= py < preview_img.height
-                                    ):
-                                        preview_img.putpixel((px, py), (0, 0, 0))
+            import numpy as np
+
+            np.random.seed(42)
+
+            from utils import clean_dot_positions
+
+            positions = clean_dot_positions(mask, brush_px, final_w, final_h)
+
+            for x, y in positions:
+                for dy in range(-dot_radius, dot_radius + 1):
+                    for dx in range(-dot_radius, dot_radius + 1):
+                        if dx * dx + dy * dy <= dot_radius * dot_radius:
+                            px = x + dx
+                            py = y + dy
+                            if (
+                                0 <= px < preview_img.width
+                                and 0 <= py < preview_img.height
+                            ):
+                                preview_img.putpixel((px, py), (0, 0, 0))
 
             preview_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
 
-            final_preview = Image.new("RGB", (120, 120), (240, 240, 240)[0])
+            final_preview = Image.new("RGB", (120, 120), (240, 240, 240))
             x_offset = (120 - preview_img.width) // 2
             y_offset = (120 - preview_img.height) // 2
             final_preview.paste(preview_img, (x_offset, y_offset))
 
             return pil_to_qpixmap(final_preview)
+
         except Exception as e:
             print(f"Error generating preview: {e}")
             fallback = QPixmap(120, 120)

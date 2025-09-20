@@ -36,6 +36,7 @@ class DrawingThread(threading.Thread):
                 return
 
             img_resized, mask, target_w, target_h = result
+
             positions = generate_dot_positions(
                 mask, target_w, target_h, self.brush_px, self.region
             )
