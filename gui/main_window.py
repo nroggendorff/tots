@@ -211,13 +211,24 @@ class DotDrawerApp(QWidget):
 
             img_resized, dark_dots, medium_dots, light_dots = result
 
+            stages = []
+            if dark_dots:
+                stages.append(("dark", dark_dots))
+            if medium_dots:
+                stages.append(("medium", medium_dots))
+            if light_dots:
+                stages.append(("light", light_dots))
+            bg_color = None
+            if stages:
+                most_common_stage = max(stages, key=lambda s: len(s[1]))
+                bg_color, bg_dots = most_common_stage
+                stages = [(c, d) for (c, d) in stages if c != bg_color]
             final_w = img_resized.size[0]
             final_h = img_resized.size[1]
 
             preview_img = Image.new("RGB", (final_w, final_h), (255, 255, 255))
             dot_radius = max(1, brush_px // 3)
 
-            import numpy as np
 
             np.random.seed(42)
 
@@ -234,13 +245,25 @@ class DotDrawerApp(QWidget):
                                 ):
                                     preview_img.putpixel((px, py), preview_color)
 
-            draw_dots_with_preview_color(dark_dots, (0, 0, 0))
-            draw_dots_with_preview_color(medium_dots, (128, 128, 128))
-            draw_dots_with_preview_color(light_dots, (200, 200, 200))
 
+            for color_type, dots in stages:
+                if color_type == "dark":
+                    draw_dots_with_preview_color(dots, (0, 0, 0))
+                elif color_type == "medium":
+                    draw_dots_with_preview_color(dots, (128, 128, 128))
+                elif color_type == "light":
+                    draw_dots_with_preview_color(dots, (200, 200, 200))
             preview_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
 
-            final_preview = Image.new("RGB", (120, 120), (240, 240, 240))
+            if bg_color == "dark":
+                bg_rgb = (0, 0, 0)
+            elif bg_color == "medium":
+                bg_rgb = (128, 128, 128)
+            elif bg_color == "light":
+                bg_rgb = (200, 200, 200)
+            else:
+                bg_rgb = (240, 240, 240)
+            final_preview = Image.new("RGB", (120, 120), bg_rgb)
             x_offset = (120 - preview_img.width) // 2
             y_offset = (120 - preview_img.height) // 2
             final_preview.paste(preview_img, (x_offset, y_offset))
@@ -415,11 +438,40 @@ class DotDrawerApp(QWidget):
             else:
                 color_info += f"\n{color_type.title()}: default"
 
+        try:
+            result = process_image_for_multicolor_drawing(
+                img, region.w, region.h, threshold, brush_px
+            )
+
+            bg_color_info = ""
+            if result is not None:
+                img_resized, dark_dots, medium_dots, light_dots = result
+
+                stages = []
+                if dark_dots:
+                    stages.append(("dark", dark_dots))
+                if medium_dots:
+                    stages.append(("medium", medium_dots))
+                if light_dots:
+                    stages.append(("light", light_dots))
+
+                if stages:
+                    most_common_stage = max(stages, key=lambda s: len(s[1]))
+                    bg_color, bg_dots = most_common_stage
+                    bg_color_info = f"\nBackground: {bg_color.title()} ({len(bg_dots)} dots - will be skipped)"
+                else:
+                    bg_color_info = "\nBackground: White (no dots to draw)"
+            else:
+                bg_color_info = "\nBackground: Unable to determine"
+        except Exception as e:
+            print(f"Error determining background color: {e}")
+            bg_color_info = "\nBackground: Unable to determine"
+
         confirm = QMessageBox.question(
             self,
             "Confirm Draw",
             f"Start drawing '{display_name}' in region x={region.x},y={region.y},w={region.w},h={region.h}?\n\n"
-            f"Brush: {brush_px}px, Threshold: {threshold}{color_info}\n\n"
+            f"Brush: {brush_px}px, Threshold: {threshold}{color_info}{bg_color_info}\n\n"
             "This will move your mouse and click. You'll get a 3s countdown to cancel.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,

@@ -99,7 +99,16 @@ class DrawingThread(threading.Thread):
                 drawing_stages.append(("medium", medium_positions))
             if light_positions:
                 drawing_stages.append(("light", light_positions))
-
+            if drawing_stages:
+                most_common_stage = max(drawing_stages, key=lambda s: len(s[1]))
+                bg_color, bg_positions = most_common_stage
+                print(
+                    f"Setting background color to '{bg_color}' ({len(bg_positions)} dots) and skipping that stage"
+                )
+                self._click_color_location(bg_color)
+                drawing_stages = [
+                    (c, pos) for (c, pos) in drawing_stages if c != bg_color
+                ]
             total_dots = sum(len(positions) for _, positions in drawing_stages)
             dots_drawn = 0
 
