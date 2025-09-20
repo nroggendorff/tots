@@ -46,21 +46,7 @@ class DotDrawerApp(QWidget):
         self._draw_thread: Optional[DrawingThread] = None
 
         self._setup_ui()
-        self._setup_shortcuts()
         self._update_dot_preview()
-
-    def _setup_shortcuts(self):
-        print("Setting up F7 shortcut")
-
-        self.f7_shortcut = QShortcut(QKeySequence("F7"), self)
-        self.f7_shortcut.activated.connect(self._cancel_drawing)
-        self.f7_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        print(f"F7 shortcut created: {self.f7_shortcut.key().toString()}")
-
-        self.f7_shortcut2 = QShortcut(QKeySequence(Qt.Key.Key_F7), self)
-        self.f7_shortcut2.activated.connect(self._cancel_drawing)
-        self.f7_shortcut2.setContext(Qt.ShortcutContext.WindowShortcut)
-        print(f"F7 shortcut2 created: {self.f7_shortcut2.key().toString()}")
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -75,13 +61,6 @@ class DotDrawerApp(QWidget):
         right_layout.addWidget(self.img_list)
 
         buttons_layout = QHBoxLayout()
-        self.cancel_draw_btn = QPushButton("Cancel drawing (F7)")
-        self.cancel_draw_btn.setStyleSheet(
-            "font-weight: bold; background: #e53935; color: white; margin-top: 10px;"
-        )
-        self.cancel_draw_btn.clicked.connect(self._cancel_drawing)
-        self.cancel_draw_btn.setEnabled(False)
-        buttons_layout.addWidget(self.cancel_draw_btn)
         right_layout.addLayout(buttons_layout)
 
         layout.addLayout(left_layout, 0)
@@ -156,7 +135,7 @@ class DotDrawerApp(QWidget):
         clipboard_btn.clicked.connect(self.upload_from_clipboard)
         controls_col1.addWidget(clipboard_btn)
 
-        note = QLabel("Drawing will move your mouse and click. Press F7 to cancel.")
+        note = QLabel("Drawing will move your mouse and click.")
         note.setWordWrap(True)
         note.setStyleSheet(
             "color: #b71c1c; font-size: 11px; background: #fff3e0; border-radius: 5px; padding: 4px 8px; margin-top: 8px;"
@@ -201,16 +180,6 @@ class DotDrawerApp(QWidget):
                 status_parts.append(f"{color_type.title()} (default)")
 
         self.color_status_label.setText(f"Colors: {', '.join(status_parts)}")
-
-    def keyPressEvent(self, a0):
-        event = a0
-        print(f"Key pressed: {event.key()}, F7 = {Qt.Key.Key_F7}")
-        if event.key() == Qt.Key.Key_F7:
-            print("F7 detected in keyPressEvent")
-            self._cancel_drawing()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
 
     def focusInEvent(self, a0):
         super().focusInEvent(a0)
@@ -458,8 +427,6 @@ class DotDrawerApp(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        self._stop_flag.clear()
-        self.cancel_draw_btn.setEnabled(True)
         self._draw_thread = DrawingThread(
             img,
             region,
@@ -470,10 +437,3 @@ class DotDrawerApp(QWidget):
             self.color_locations,
         )
         self._draw_thread.start()
-
-    def _cancel_drawing(self):
-        print("_cancel_drawing called!")
-        self._stop_flag.set()
-        self.cancel_draw_btn.setEnabled(False)
-        if self._draw_thread and self._draw_thread.is_alive():
-            self._draw_thread.join(timeout=1.0)
