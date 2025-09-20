@@ -17,13 +17,15 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QApplication,
     QShortcut,
+    QGroupBox,
 )
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QKeySequence
 from PIL import Image
 
-from models import Region
-from utils import pil_to_qpixmap, process_image_for_drawing
+from models import Region, ColorLocation
+from utils import pil_to_qpixmap, process_image_for_multicolor_drawing
 from gui.region_selector import RegionSelector
+from gui.location_picker import LocationPicker
 from gui.drawing_thread import DrawingThread
 from gui.image_list_widget import ImageListWidget
 
@@ -37,6 +39,8 @@ class DotDrawerApp(QWidget):
 
         self.selected_region: Optional[Region] = None
         self.uploaded_images: List[Tuple[str, Image.Image]] = []
+
+        self.color_locations = {"dark": None, "medium": None, "light": None}
 
         self._stop_flag = threading.Event()
         self._draw_thread: Optional[DrawingThread] = None
@@ -117,6 +121,33 @@ class DotDrawerApp(QWidget):
         )
         controls_col1.addWidget(self.region_info_label)
 
+        color_group = QGroupBox("Color Locations")
+        color_layout = QVBoxLayout()
+
+        self.dark_btn = QPushButton("Set Dark Color Location")
+        self.dark_btn.clicked.connect(lambda: self._pick_color_location("dark"))
+        color_layout.addWidget(self.dark_btn)
+
+        self.medium_btn = QPushButton("Set Medium Color Location")
+        self.medium_btn.clicked.connect(lambda: self._pick_color_location("medium"))
+        color_layout.addWidget(self.medium_btn)
+
+        self.light_btn = QPushButton("Set Light Color Location")
+        self.light_btn.clicked.connect(lambda: self._pick_color_location("light"))
+        color_layout.addWidget(self.light_btn)
+
+        self.color_status_label = QLabel(
+            "Colors: Dark (default), Medium (default), Light (default)"
+        )
+        self.color_status_label.setStyleSheet(
+            "color: #616161; font-size: 11px; margin-top: 4px;"
+        )
+        self.color_status_label.setWordWrap(True)
+        color_layout.addWidget(self.color_status_label)
+
+        color_group.setLayout(color_layout)
+        controls_col1.addWidget(color_group)
+
         upload_btn = QPushButton("Upload image")
         upload_btn.clicked.connect(self.upload_image)
         controls_col1.addWidget(upload_btn)
@@ -146,6 +177,30 @@ class DotDrawerApp(QWidget):
         controls.addLayout(controls_grid)
 
         return controls
+
+    def _pick_color_location(self, color_type):
+        self.hide()
+        QApplication.processEvents()
+        location = LocationPicker.get_location(
+            self, f"Click to set {color_type} color location"
+        )
+        self.show()
+        self.setFocus()
+
+        if location:
+            self.color_locations[color_type] = location
+            self._update_color_status()
+
+    def _update_color_status(self):
+        status_parts = []
+        for color_type in ["dark", "medium", "light"]:
+            loc = self.color_locations[color_type]
+            if loc:
+                status_parts.append(f"{color_type.title()} ({loc.x},{loc.y})")
+            else:
+                status_parts.append(f"{color_type.title()} (default)")
+
+        self.color_status_label.setText(f"Colors: {', '.join(status_parts)}")
 
     def keyPressEvent(self, a0):
         event = a0
@@ -177,15 +232,18 @@ class DotDrawerApp(QWidget):
                 else (200, 200)
             )
 
-            result = process_image_for_drawing(
+            result = process_image_for_multicolor_drawing(
                 img, target_w, target_h, threshold, brush_px
             )
-            if result[0] is None:
+            if result is None:
                 fallback = QPixmap(120, 120)
                 fallback.fill(Qt.GlobalColor.white)
                 return fallback
 
-            img_resized, mask, final_w, final_h = result
+            img_resized, dark_dots, medium_dots, light_dots = result
+
+            final_w = img_resized.size[0]
+            final_h = img_resized.size[1]
 
             preview_img = Image.new("RGB", (final_w, final_h), (255, 255, 255))
             dot_radius = max(1, brush_px // 3)
@@ -194,21 +252,22 @@ class DotDrawerApp(QWidget):
 
             np.random.seed(42)
 
-            from utils import clean_dot_positions
+            def draw_dots_with_preview_color(dots, preview_color):
+                for x, y in dots:
+                    for dy in range(-dot_radius, dot_radius + 1):
+                        for dx in range(-dot_radius, dot_radius + 1):
+                            if dx * dx + dy * dy <= dot_radius * dot_radius:
+                                px = x + dx
+                                py = y + dy
+                                if (
+                                    0 <= px < preview_img.width
+                                    and 0 <= py < preview_img.height
+                                ):
+                                    preview_img.putpixel((px, py), preview_color)
 
-            positions = clean_dot_positions(mask, brush_px, final_w, final_h)
-
-            for x, y in positions:
-                for dy in range(-dot_radius, dot_radius + 1):
-                    for dx in range(-dot_radius, dot_radius + 1):
-                        if dx * dx + dy * dy <= dot_radius * dot_radius:
-                            px = x + dx
-                            py = y + dy
-                            if (
-                                0 <= px < preview_img.width
-                                and 0 <= py < preview_img.height
-                            ):
-                                preview_img.putpixel((px, py), (0, 0, 0))
+            draw_dots_with_preview_color(dark_dots, (0, 0, 0))
+            draw_dots_with_preview_color(medium_dots, (128, 128, 128))
+            draw_dots_with_preview_color(light_dots, (200, 200, 200))
 
             preview_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
 
@@ -378,11 +437,20 @@ class DotDrawerApp(QWidget):
         threshold = self.threshold_slider.value()
 
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
+
+        color_info = ""
+        for color_type in ["dark", "medium", "light"]:
+            loc = self.color_locations[color_type]
+            if loc:
+                color_info += f"\n{color_type.title()}: ({loc.x},{loc.y})"
+            else:
+                color_info += f"\n{color_type.title()}: default"
+
         confirm = QMessageBox.question(
             self,
             "Confirm Draw",
             f"Start drawing '{display_name}' in region x={region.x},y={region.y},w={region.w},h={region.h}?\n\n"
-            f"Brush: {brush_px}px, Threshold: {threshold}\n\n"
+            f"Brush: {brush_px}px, Threshold: {threshold}{color_info}\n\n"
             "This will move your mouse and click. You'll get a 3s countdown to cancel.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -393,7 +461,13 @@ class DotDrawerApp(QWidget):
         self._stop_flag.clear()
         self.cancel_draw_btn.setEnabled(True)
         self._draw_thread = DrawingThread(
-            img, region, brush_px, threshold, self._stop_flag, self
+            img,
+            region,
+            brush_px,
+            threshold,
+            self._stop_flag,
+            self,
+            self.color_locations,
         )
         self._draw_thread.start()
 

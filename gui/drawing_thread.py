@@ -3,8 +3,8 @@ import time
 import pyautogui
 from PyQt5.QtWidgets import QApplication
 from PIL import Image
-from models import Region
-from utils import process_image_for_drawing, generate_dot_positions
+from models import Region, ColorLocation
+from utils import process_image_for_multicolor_drawing, generate_multicolor_positions
 
 
 class DrawingThread(threading.Thread):
@@ -16,6 +16,7 @@ class DrawingThread(threading.Thread):
         threshold: int,
         stop_flag: threading.Event,
         parent_widget,
+        color_locations: dict = None,
     ):
         super().__init__()
         self.img = img.copy()
@@ -24,24 +25,58 @@ class DrawingThread(threading.Thread):
         self.threshold = threshold
         self.stop_flag = stop_flag
         self.parent_widget = parent_widget
+        self.color_locations = color_locations or {}
+
+    def _click_color_location(self, color_type: str):
+        location = self.color_locations.get(color_type)
+
+        if not location and color_type != "dark":
+            location = self.color_locations.get("dark")
+            print(
+                f"No {color_type} location set, using dark color location as fallback"
+            )
+
+        if location:
+            try:
+                print(
+                    f"Switching to {color_type} color at ({location.x}, {location.y})"
+                )
+                pyautogui.moveTo(location.x, location.y, duration=0.15)
+                time.sleep(0.1)
+                pyautogui.click()
+                time.sleep(0.15)
+                print(f"Successfully switched to {color_type} color")
+            except Exception as e:
+                print(f"Error clicking {color_type} color location: {e}")
+        else:
+            if color_type == "dark":
+                print(
+                    f"No {color_type} color location set, using current drawing color"
+                )
+            else:
+                print(
+                    f"No {color_type} color location set, and no dark fallback available"
+                )
 
     def run(self):
         try:
-            result = process_image_for_drawing(
+            result = process_image_for_multicolor_drawing(
                 self.img, self.region.w, self.region.h, self.threshold, self.brush_px
             )
 
-            if result[0] is None:
+            if result is None:
                 QApplication.beep()
                 return
 
-            img_resized, mask, target_w, target_h = result
+            img_resized, dark_dots, medium_dots, light_dots = result
 
-            positions = generate_dot_positions(
-                mask, target_w, target_h, self.brush_px, self.region
+            dark_positions, medium_positions, light_positions = (
+                generate_multicolor_positions(
+                    dark_dots, medium_dots, light_dots, self.region
+                )
             )
 
-            if not positions:
+            if not dark_positions and not medium_positions and not light_positions:
                 QApplication.beep()
                 return
 
@@ -56,20 +91,61 @@ class DrawingThread(threading.Thread):
             pyautogui.PAUSE = 0.01
             pyautogui.FAILSAFE = True
 
-            for idx, (sx, sy) in enumerate(positions):
+            drawing_stages = []
+
+            if dark_positions:
+                drawing_stages.append(("dark", dark_positions))
+            if medium_positions:
+                drawing_stages.append(("medium", medium_positions))
+            if light_positions:
+                drawing_stages.append(("light", light_positions))
+
+            total_dots = sum(len(positions) for _, positions in drawing_stages)
+            dots_drawn = 0
+
+            for stage_idx, (color_type, positions) in enumerate(drawing_stages):
                 if self.stop_flag.is_set():
                     break
-                try:
-                    pyautogui.moveTo(sx, sy, duration=0.02)
-                    pyautogui.click()
-                    if idx % 50 == 0:
-                        time.sleep(0.05)
-                except pyautogui.FailSafeException:
-                    self.stop_flag.set()
+
+                print(f"Starting {color_type} stage with {len(positions)} positions")
+
+                self._click_color_location(color_type)
+
+                time.sleep(0.3)
+
+                if self.stop_flag.is_set():
                     break
-                except Exception as e:
-                    print(f"Error during click at {sx}, {sy}: {e}")
-                    continue
+
+                for idx, (sx, sy) in enumerate(positions):
+                    if self.stop_flag.is_set():
+                        break
+
+                    try:
+                        pyautogui.moveTo(sx, sy, duration=0.02)
+                        pyautogui.click()
+                        dots_drawn += 1
+
+                        if idx % 50 == 0:
+                            time.sleep(0.05)
+
+                        if dots_drawn % 100 == 0:
+                            print(
+                                f"Progress: {dots_drawn}/{total_dots} dots ({color_type} stage)"
+                            )
+
+                    except pyautogui.FailSafeException:
+                        self.stop_flag.set()
+                        break
+                    except Exception as e:
+                        print(f"Error during click at {sx}, {sy}: {e}")
+                        continue
+
+                print(f"Completed {color_type} stage")
+
+                if stage_idx < len(drawing_stages) - 1:
+                    time.sleep(0.5)
+
+            print(f"Drawing complete. Drew {dots_drawn} dots total.")
 
         except Exception as e:
             print(f"Error while drawing: {e}")

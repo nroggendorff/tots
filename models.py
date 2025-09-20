@@ -7,3 +7,9 @@ class Region:
     y: int
     w: int
     h: int
+
+
+@dataclass
+class ColorLocation:
+    x: int
+    y: int
