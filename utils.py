@@ -2,8 +2,10 @@ from PyQt5.QtGui import QPixmap, QImage
 from PIL import Image
 import numpy as np
 from scipy.ndimage import gaussian_filter
+from scipy import ndimage
 import pyautogui
 import time
+from skimage import feature
 
 
 def pil_to_qpixmap(pil_img):
@@ -31,6 +33,95 @@ def sample_color_at_location(location):
 def rgb_to_luminance(rgb):
     r, g, b = rgb
     return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def detect_edges(img_array, threshold, brush_px):
+    smoothed = gaussian_filter(img_array.astype(float), sigma=max(0.5, brush_px / 8))
+
+    edges = feature.canny(
+        smoothed,
+        low_threshold=threshold * 0.3,
+        high_threshold=threshold,
+        sigma=max(0.8, brush_px / 6),
+    )
+
+    return edges.astype(bool)
+
+
+def trace_edge_lines(edge_mask, min_line_length=5):
+    lines = []
+    visited = np.zeros_like(edge_mask, dtype=bool)
+
+    def get_neighbors(y, x):
+        neighbors = []
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                ny, nx = y + dy, x + dx
+                if (
+                    0 <= ny < edge_mask.shape[0]
+                    and 0 <= nx < edge_mask.shape[1]
+                    and edge_mask[ny, nx]
+                    and not visited[ny, nx]
+                ):
+                    neighbors.append((ny, nx))
+        return neighbors
+
+    def trace_line(start_y, start_x):
+        line = [(start_x, start_y)]
+        visited[start_y, start_x] = True
+        current_y, current_x = start_y, start_x
+
+        while True:
+            neighbors = get_neighbors(current_y, current_x)
+            if not neighbors:
+                break
+
+            next_y, next_x = neighbors[0]
+            line.append((next_x, next_y))
+            visited[next_y, next_x] = True
+            current_y, current_x = next_y, next_x
+
+        return line
+
+    for y in range(edge_mask.shape[0]):
+        for x in range(edge_mask.shape[1]):
+            if edge_mask[y, x] and not visited[y, x]:
+                line = trace_line(y, x)
+                if len(line) >= min_line_length:
+                    lines.append(line)
+
+    return lines
+
+
+def generate_fill_scribbles(mask, brush_px, density_factor=0.7):
+    scribbles = []
+    spacing = max(2, int(brush_px * density_factor))
+
+    for y in range(0, mask.shape[0], spacing):
+        row_points = []
+        for x in range(mask.shape[1]):
+            if mask[y, x]:
+                row_points.append((x, y))
+
+        if len(row_points) >= 2:
+            i = 0
+            while i < len(row_points):
+                scribble_start = i
+                while (
+                    i < len(row_points) - 1
+                    and row_points[i + 1][0] - row_points[i][0] <= spacing * 2
+                ):
+                    i += 1
+
+                if i > scribble_start:
+                    scribble_line = row_points[scribble_start : i + 1]
+                    if len(scribble_line) >= 3:
+                        scribbles.append(scribble_line)
+                i += 1
+
+    return scribbles
 
 
 def create_luminance_based_masks(img_array, color_sources, brush_px, threshold):
@@ -119,6 +210,91 @@ def create_luminance_based_masks(img_array, color_sources, brush_px, threshold):
         masks[light_name] = smoothed >= light_threshold
 
     return masks, active_colors
+
+
+def process_image_for_edge_drawing(
+    img: Image.Image,
+    region_w: int,
+    region_h: int,
+    threshold: int,
+    brush_px: int,
+    color_locations: dict = None,
+    sampled_colors: dict = None,
+    brightness_offset: int = 0,
+    enable_fill: bool = False,
+):
+    try:
+        original_img = img.copy()
+
+        if img.mode == "RGBA":
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(
+                img, mask=img.split()[3] if len(img.split()) == 4 else None
+            )
+            img_gray = background.convert("L")
+            color_img = background
+        else:
+            if img.mode != "RGB":
+                color_img = img.convert("RGB")
+            else:
+                color_img = img
+            img_gray = img.convert("L")
+
+        img_w, img_h = img_gray.size
+        if img_w == 0 or img_h == 0:
+            return None
+
+        scale = min(region_w / img_w, region_h / img_h)
+        target_w = max(1, int(img_w * scale))
+        target_h = max(1, int(img_h * scale))
+
+        img_resized_gray = img_gray.resize((target_w, target_h), resample=Image.LANCZOS)
+        img_resized_color = color_img.resize(
+            (target_w, target_h), resample=Image.LANCZOS
+        )
+
+        arr = np.array(img_resized_gray, dtype=np.int16)
+        arr = np.clip(arr + brightness_offset, 0, 255).astype(np.uint8)
+
+        if arr.size == 0:
+            return None
+
+        np.random.seed(42)
+
+        source_for_masking = None
+        if sampled_colors and any(v is not None for v in sampled_colors.values()):
+            source_for_masking = sampled_colors
+        elif color_locations and any(v is not None for v in color_locations.values()):
+            source_for_masking = color_locations
+
+        if source_for_masking:
+            masks, active_colors = create_luminance_based_masks(
+                arr, source_for_masking, brush_px, threshold
+            )
+        else:
+            masks = {"black": arr < threshold}
+            active_colors = {"black": {"rgb": (0, 0, 0), "luminance": 0}}
+
+        drawing_data = {}
+
+        for color_name, mask in masks.items():
+            color_drawing_data = {"lines": [], "scribbles": []}
+
+            edges = detect_edges(arr * mask.astype(float), threshold, brush_px)
+            lines = trace_edge_lines(edges, min_line_length=max(3, brush_px // 2))
+            color_drawing_data["lines"] = lines
+
+            if enable_fill:
+                scribbles = generate_fill_scribbles(mask, brush_px)
+                color_drawing_data["scribbles"] = scribbles
+
+            drawing_data[color_name] = color_drawing_data
+
+        return img_resized_color, drawing_data, active_colors
+
+    except Exception as e:
+        print(f"Error in process_image_for_edge_drawing: {e}")
+        return None
 
 
 def process_image_for_multicolor_drawing(

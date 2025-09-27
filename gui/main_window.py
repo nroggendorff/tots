@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QShortcut,
     QGroupBox,
+    QCheckBox,
 )
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QKeySequence
 from PIL import Image
@@ -25,9 +26,12 @@ from PIL import Image
 from models import Region, ColorLocation
 from utils import (
     pil_to_qpixmap,
-    process_image_for_multicolor_drawing,
+    process_image_for_edge_drawing,
     sample_color_at_location,
     rgb_to_luminance,
+    detect_edges,
+    trace_edge_lines,
+    generate_fill_scribbles,
 )
 from gui.region_selector import RegionSelector
 from gui.location_picker import LocationPicker
@@ -38,7 +42,7 @@ from gui.image_list_widget import ImageListWidget
 class DotDrawerApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dot Drawer")
+        self.setWindowTitle("Edge Drawer")
         self.setMinimumSize(1000, 600)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -78,11 +82,11 @@ class DotDrawerApp(QWidget):
         controls_col1 = QVBoxLayout()
         controls_col2 = QVBoxLayout()
 
-        threshold_label = QLabel("Threshold:")
+        threshold_label = QLabel("Edge Sensitivity:")
         threshold_label.setObjectName("sectionLabel")
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
-        self.threshold_slider.setRange(0, 255)
-        self.threshold_slider.setValue(128)
+        self.threshold_slider.setRange(10, 255)
+        self.threshold_slider.setValue(100)
         self.threshold_slider.valueChanged.connect(self._on_settings_changed)
         controls_col1.addWidget(threshold_label)
         controls_col1.addWidget(self.threshold_slider)
@@ -96,7 +100,7 @@ class DotDrawerApp(QWidget):
         controls_col1.addWidget(brightness_label)
         controls_col1.addWidget(self.brightness_slider)
 
-        brush_label = QLabel("Brush size:")
+        brush_label = QLabel("Line thickness:")
         brush_label.setObjectName("sectionLabel")
         self.brush_spin = QSpinBox()
         self.brush_spin.setRange(1, 200)
@@ -104,6 +108,10 @@ class DotDrawerApp(QWidget):
         self.brush_spin.valueChanged.connect(self._on_settings_changed)
         controls_col1.addWidget(brush_label)
         controls_col1.addWidget(self.brush_spin)
+
+        self.enable_fill_checkbox = QCheckBox("Enable fill (scribbles)")
+        self.enable_fill_checkbox.stateChanged.connect(self._on_settings_changed)
+        controls_col1.addWidget(self.enable_fill_checkbox)
 
         region_btn = QPushButton("Select region")
         region_btn.clicked.connect(self.select_region)
@@ -152,7 +160,7 @@ class DotDrawerApp(QWidget):
         clipboard_btn.clicked.connect(self.upload_from_clipboard)
         controls_col1.addWidget(clipboard_btn)
 
-        note = QLabel("Drawing will move your mouse and click.")
+        note = QLabel("Drawing will move your mouse and draw lines.")
         note.setWordWrap(True)
         note.setStyleSheet(
             "color: #b71c1c; font-size: 11px; background: #fff3e0; border-radius: 5px; padding: 4px 8px; margin-top: 8px;"
@@ -160,7 +168,7 @@ class DotDrawerApp(QWidget):
         controls_col1.addWidget(note)
         controls_col1.addStretch()
 
-        dot_preview_label = QLabel("Dot preview:")
+        dot_preview_label = QLabel("Line preview:")
         dot_preview_label.setObjectName("sectionLabel")
         self.dot_preview = QLabel()
         self.dot_preview.setFixedSize(80, 80)
@@ -239,6 +247,7 @@ class DotDrawerApp(QWidget):
             threshold = self.threshold_slider.value()
             brightness_offset = self.brightness_slider.value()
             brush_px = self.brush_spin.value()
+            enable_fill = self.enable_fill_checkbox.isChecked()
 
             target_w, target_h = (
                 (self.selected_region.w, self.selected_region.h)
@@ -246,7 +255,7 @@ class DotDrawerApp(QWidget):
                 else (200, 200)
             )
 
-            result = process_image_for_multicolor_drawing(
+            result = process_image_for_edge_drawing(
                 img,
                 target_w,
                 target_h,
@@ -255,6 +264,7 @@ class DotDrawerApp(QWidget):
                 self.color_locations,
                 self.sampled_colors,
                 brightness_offset,
+                enable_fill,
             )
 
             if result is None:
@@ -262,23 +272,35 @@ class DotDrawerApp(QWidget):
                 fallback.fill(Qt.GlobalColor.white)
                 return fallback
 
-            img_resized, color_dots, active_colors = result
+            img_resized, drawing_data, active_colors = result
 
             final_w = img_resized.size[0]
             final_h = img_resized.size[1]
 
             preview_img = Image.new("RGB", (final_w, final_h), (255, 255, 255))
-            dot_radius = max(1, brush_px // 3)
 
             np.random.seed(42)
 
-            def draw_dots_with_preview_color(dots, preview_color):
-                for x, y in dots:
-                    for dy in range(-dot_radius, dot_radius + 1):
-                        for dx in range(-dot_radius, dot_radius + 1):
-                            if dx * dx + dy * dy <= dot_radius * dot_radius:
-                                px = x + dx
-                                py = y + dy
+            def draw_line_preview(points, preview_color, thickness=1):
+                for i in range(len(points) - 1):
+                    x1, y1 = points[i]
+                    x2, y2 = points[i + 1]
+
+                    dx = x2 - x1
+                    dy = y2 - y1
+                    steps = max(abs(dx), abs(dy), 1)
+
+                    for step in range(steps + 1):
+                        if steps == 0:
+                            x, y = x1, y1
+                        else:
+                            x = int(x1 + (dx * step) / steps)
+                            y = int(y1 + (dy * step) / steps)
+
+                        for dy_offset in range(-thickness // 2, thickness // 2 + 1):
+                            for dx_offset in range(-thickness // 2, thickness // 2 + 1):
+                                px = x + dx_offset
+                                py = y + dy_offset
                                 if (
                                     0 <= px < preview_img.width
                                     and 0 <= py < preview_img.height
@@ -286,26 +308,41 @@ class DotDrawerApp(QWidget):
                                     preview_img.putpixel((px, py), preview_color)
 
             stages = [
-                (color_name, dots) for color_name, dots in color_dots.items() if dots
+                (color_name, data)
+                for color_name, data in drawing_data.items()
+                if data["lines"] or data.get("scribbles", [])
             ]
 
             bg_color = None
             bg_rgb = (255, 255, 255)
             if stages:
-                most_common_stage = max(stages, key=lambda s: len(s[1]))
-                bg_color, bg_dots = most_common_stage
+                most_common_stage = max(
+                    stages,
+                    key=lambda s: len(s[1]["lines"]) + len(s[1].get("scribbles", [])),
+                )
+                bg_color, bg_data = most_common_stage
                 stages = [(c, d) for (c, d) in stages if c != bg_color]
 
                 if bg_color in active_colors:
                     bg_rgb = active_colors[bg_color]["rgb"]
 
-            for color_name, dots in stages:
+            line_thickness = max(1, brush_px // 4)
+
+            for color_name, data in stages:
                 if color_name in active_colors:
                     preview_color = active_colors[color_name]["rgb"]
                 else:
                     preview_color = (0, 0, 0)
 
-                draw_dots_with_preview_color(dots, preview_color)
+                for line in data["lines"]:
+                    if len(line) >= 2:
+                        draw_line_preview(line, preview_color, line_thickness)
+
+                for scribble in data.get("scribbles", []):
+                    if len(scribble) >= 2:
+                        draw_line_preview(
+                            scribble, preview_color, max(1, line_thickness // 2)
+                        )
 
             preview_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
 
@@ -353,11 +390,28 @@ class DotDrawerApp(QWidget):
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing, True)
         brush_px = self.brush_spin.value()
-        r = max(2, brush_px // 2)
-        center = QPoint(size.width() // 2, size.height() // 2)
+
         painter.setBrush(QColor(30, 144, 255))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(center, r, r)
+        painter.setPen(QColor(30, 144, 255))
+        pen = painter.pen()
+        pen.setWidth(max(1, brush_px // 3))
+        painter.setPen(pen)
+
+        center = QPoint(size.width() // 2, size.height() // 2)
+        line_length = min(size.width(), size.height()) - 20
+
+        start_point = QPoint(center.x() - line_length // 2, center.y())
+        end_point = QPoint(center.x() + line_length // 2, center.y())
+
+        painter.drawLine(start_point, end_point)
+
+        if self.enable_fill_checkbox.isChecked():
+            scribble_y = center.y() + 10
+            painter.drawLine(
+                QPoint(center.x() - line_length // 3, scribble_y),
+                QPoint(center.x() + line_length // 3, scribble_y),
+            )
+
         painter.end()
         self.dot_preview.setPixmap(pix)
 
@@ -474,6 +528,7 @@ class DotDrawerApp(QWidget):
         brush_px = self.brush_spin.value()
         threshold = self.threshold_slider.value()
         brightness_offset = self.brightness_slider.value()
+        enable_fill = self.enable_fill_checkbox.isChecked()
 
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
 
@@ -482,7 +537,7 @@ class DotDrawerApp(QWidget):
         )
 
         if active_color_count == 0:
-            color_info = "\nColors: Black on white background (default)"
+            color_info = "\nColors: Black lines on white background (default)"
         else:
             color_info = f"\nUsing {active_color_count} selected color(s):"
             for color_type in ["dark", "medium", "light"]:
@@ -494,7 +549,7 @@ class DotDrawerApp(QWidget):
                     color_info += f"\n  {color_type.title()}: RGB({r},{g},{b}) L={luminance:.0f} at ({loc.x},{loc.y})"
 
         try:
-            result = process_image_for_multicolor_drawing(
+            result = process_image_for_edge_drawing(
                 img,
                 region.w,
                 region.h,
@@ -503,38 +558,55 @@ class DotDrawerApp(QWidget):
                 self.color_locations,
                 self.sampled_colors,
                 brightness_offset,
+                enable_fill,
             )
 
             bg_color_info = ""
+            total_elements_info = ""
             if result is not None:
-                img_resized, color_dots, active_colors = result
+                img_resized, drawing_data, active_colors = result
 
                 stages = [
-                    (color_name, dots)
-                    for color_name, dots in color_dots.items()
-                    if dots
+                    (color_name, data)
+                    for color_name, data in drawing_data.items()
+                    if data["lines"] or data.get("scribbles", [])
                 ]
 
                 if stages:
-                    most_common_stage = max(stages, key=lambda s: len(s[1]))
-                    bg_color, bg_dots = most_common_stage
+                    most_common_stage = max(
+                        stages,
+                        key=lambda s: len(s[1]["lines"])
+                        + len(s[1].get("scribbles", [])),
+                    )
+                    bg_color, bg_data = most_common_stage
 
                     if bg_color in active_colors:
                         bg_rgb = active_colors[bg_color]["rgb"]
                         bg_color_info = f"\nBackground color: {bg_color} (RGB{bg_rgb})"
 
+                total_lines = sum(len(data["lines"]) for data in drawing_data.values())
+                total_scribbles = sum(
+                    len(data.get("scribbles", [])) for data in drawing_data.values()
+                )
+                total_elements_info = f"\nWill draw {total_lines} edge lines"
+                if enable_fill and total_scribbles > 0:
+                    total_elements_info += f" and {total_scribbles} fill scribbles"
+
         except Exception:
             bg_color_info = ""
+            total_elements_info = ""
+
+        fill_status = " (with fill enabled)" if enable_fill else ""
 
         confirm = QMessageBox.question(
             self,
             "Confirm Drawing",
-            f"Draw image '{display_name}'?\n\n"
+            f"Draw image '{display_name}'{fill_status}?\n\n"
             f"Region: x={region.x}, y={region.y}, w={region.w}, h={region.h}\n"
-            f"Brush size: {brush_px}\n"
-            f"Threshold: {threshold}\n"
+            f"Line thickness: {brush_px}\n"
+            f"Edge sensitivity: {threshold}\n"
             f"Brightness offset: {brightness_offset}"
-            f"{color_info}{bg_color_info}",
+            f"{color_info}{bg_color_info}{total_elements_info}",
         )
 
         if confirm != QMessageBox.StandardButton.Yes:
@@ -551,5 +623,6 @@ class DotDrawerApp(QWidget):
             self,
             self.color_locations,
             brightness_offset,
+            enable_fill,
         )
         self._draw_thread.start()
