@@ -217,37 +217,31 @@ def break_line_into_segments(line, max_segment_length):
         return [line] if line else []
 
     segments = []
-    current_segment = [line[0]]
-    current_length = 0
+    current_start = line[0]
 
     for i in range(1, len(line)):
-        prev_point = line[i - 1]
-        curr_point = line[i]
+        current_point = line[i]
 
-        dx = curr_point[0] - prev_point[0]
-        dy = curr_point[1] - prev_point[1]
+        dx = current_point[0] - current_start[0]
+        dy = current_point[1] - current_start[1]
         distance = (dx * dx + dy * dy) ** 0.5
 
-        current_length += distance
-        current_segment.append(curr_point)
-        if current_length >= max_segment_length:
-            if len(current_segment) >= 2:
-                segments.append(current_segment[:])
-            current_segment = [curr_point]
-            current_length = 0
+        if distance >= max_segment_length:
+            segments.append([current_start, current_point])
+            current_start = current_point
 
-    if len(current_segment) >= 2:
-        segments.append(current_segment)
-    elif len(current_segment) == 1 and segments:
-        segments[-1].extend(current_segment)
+    if len(segments) == 0:
+        segments.append([line[0], line[-1]])
+    elif current_start != segments[-1][-1]:
+        segments.append([segments[-1][-1], line[-1]])
 
     valid_segments = [seg for seg in segments if len(seg) >= 2]
 
     print(
-        f"Original line with {len(line)} points broken into {len(valid_segments)} segments"
+        f"Original line with {len(line)} points broken into {len(valid_segments)} straight segments"
     )
 
-    return valid_segments if valid_segments else [line]
+    return valid_segments if valid_segments else [[line[0], line[-1]]]
 
 
 def process_image_for_edge_drawing(

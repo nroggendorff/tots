@@ -211,7 +211,7 @@ class DotDrawerApp(QWidget):
     def _update_curve_resolution_info(self):
         if self.straight_lines_checkbox.isChecked():
             res = self.curve_resolution_slider.value()
-            self.curve_res_info.setText(f"Resolution: {res} pixels per segment")
+            self.curve_res_info.setText(f"Resolution: {51 - res} pixels per segment")
             self.curve_res_info.setStyleSheet("color: #333; font-size: 11px;")
         else:
             self.curve_res_info.setText("Resolution: 10 pixels per segment")
@@ -284,7 +284,7 @@ class DotDrawerApp(QWidget):
             brush_px = self.brush_spin.value()
             enable_fill = self.enable_fill_checkbox.isChecked()
             straight_lines_only = self.straight_lines_checkbox.isChecked()
-            curve_resolution = self.curve_resolution_slider.value()
+            curve_resolution = 51 - self.curve_resolution_slider.value()
 
             target_w, target_h = (
                 (self.selected_region.w, self.selected_region.h)
@@ -571,7 +571,7 @@ class DotDrawerApp(QWidget):
         brightness_offset = self.brightness_slider.value()
         enable_fill = self.enable_fill_checkbox.isChecked()
         straight_lines_only = self.straight_lines_checkbox.isChecked()
-        curve_resolution = self.curve_resolution_slider.value()
+        curve_resolution = 51 - self.curve_resolution_slider.value()
 
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
 
