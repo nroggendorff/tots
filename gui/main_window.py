@@ -119,17 +119,17 @@ class DotDrawerApp(QWidget):
         )
         controls_col1.addWidget(self.straight_lines_checkbox)
 
-        curve_res_label = QLabel("Curve resolution:")
+        curve_res_label = QLabel("Circle segments:")
         curve_res_label.setObjectName("sectionLabel")
         self.curve_resolution_slider = QSlider(Qt.Orientation.Horizontal)
-        self.curve_resolution_slider.setRange(3, 50)
-        self.curve_resolution_slider.setValue(10)
+        self.curve_resolution_slider.setRange(3, 20)
+        self.curve_resolution_slider.setValue(8)
         self.curve_resolution_slider.valueChanged.connect(self._on_settings_changed)
         self.curve_resolution_slider.setEnabled(False)
         controls_col1.addWidget(curve_res_label)
         controls_col1.addWidget(self.curve_resolution_slider)
 
-        self.curve_res_info = QLabel("Resolution: 10 pixels per segment")
+        self.curve_res_info = QLabel("Resolution: 8 segments per circle")
         self.curve_res_info.setStyleSheet("color: #616161; font-size: 11px;")
         controls_col1.addWidget(self.curve_res_info)
 
@@ -210,11 +210,11 @@ class DotDrawerApp(QWidget):
 
     def _update_curve_resolution_info(self):
         if self.straight_lines_checkbox.isChecked():
-            res = self.curve_resolution_slider.value()
-            self.curve_res_info.setText(f"Resolution: {51 - res} pixels per segment")
+            segments = self.curve_resolution_slider.value()
+            self.curve_res_info.setText(f"Resolution: {segments} segments per circle)")
             self.curve_res_info.setStyleSheet("color: #333; font-size: 11px;")
         else:
-            self.curve_res_info.setText("Resolution: 10 pixels per segment")
+            self.curve_res_info.setText("Resolution: 8 segments per circle")
             self.curve_res_info.setStyleSheet("color: #616161; font-size: 11px;")
 
     def _pick_color_location(self, color_type):
@@ -284,7 +284,7 @@ class DotDrawerApp(QWidget):
             brush_px = self.brush_spin.value()
             enable_fill = self.enable_fill_checkbox.isChecked()
             straight_lines_only = self.straight_lines_checkbox.isChecked()
-            curve_resolution = 51 - self.curve_resolution_slider.value()
+            segments_per_circle = self.curve_resolution_slider.value()
 
             target_w, target_h = (
                 (self.selected_region.w, self.selected_region.h)
@@ -303,7 +303,7 @@ class DotDrawerApp(QWidget):
                 brightness_offset,
                 enable_fill,
                 straight_lines_only,
-                curve_resolution,
+                segments_per_circle,
             )
 
             if result is None:
@@ -571,7 +571,7 @@ class DotDrawerApp(QWidget):
         brightness_offset = self.brightness_slider.value()
         enable_fill = self.enable_fill_checkbox.isChecked()
         straight_lines_only = self.straight_lines_checkbox.isChecked()
-        curve_resolution = 51 - self.curve_resolution_slider.value()
+        segments_per_circle = self.curve_resolution_slider.value()
 
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
 
@@ -603,7 +603,7 @@ class DotDrawerApp(QWidget):
                 brightness_offset,
                 enable_fill,
                 straight_lines_only,
-                curve_resolution,
+                segments_per_circle,
             )
 
             bg_color_info = ""
@@ -645,7 +645,7 @@ class DotDrawerApp(QWidget):
 
         fill_status = ""
         straight_status = (
-            f" (straight lines, {curve_resolution}px segments)"
+            f" ({segments_per_circle} segments per circle)"
             if straight_lines_only
             else ""
         )
@@ -677,6 +677,6 @@ class DotDrawerApp(QWidget):
             brightness_offset,
             enable_fill,
             straight_lines_only,
-            curve_resolution,
+            segments_per_circle,
         )
         self._draw_thread.start()

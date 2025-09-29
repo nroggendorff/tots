@@ -212,36 +212,56 @@ def create_luminance_based_masks(img_array, color_sources, brush_px, threshold):
     return masks, active_colors
 
 
-def break_line_into_segments(line, max_segment_length):
-    if len(line) < 2:
+def break_line_into_segments(line, segments_per_circle):
+    if len(line) < 3:
         return [line] if line else []
 
+    max_angle = (2 * np.pi) / segments_per_circle
+
     segments = []
-    current_start = line[0]
+    current_segment = [line[0]]
 
-    for i in range(1, len(line)):
-        current_point = line[i]
+    for i in range(1, len(line) - 1):
+        prev_point = np.array(current_segment[-1])
+        current_point = np.array(line[i])
+        next_point = np.array(line[i + 1])
 
-        dx = current_point[0] - current_start[0]
-        dy = current_point[1] - current_start[1]
-        distance = (dx * dx + dy * dy) ** 0.5
+        vec1 = current_point - prev_point
+        vec2 = next_point - current_point
 
-        if distance >= max_segment_length:
-            segments.append([current_start, current_point])
-            current_start = current_point
+        len1 = np.linalg.norm(vec1)
+        len2 = np.linalg.norm(vec2)
 
-    if len(segments) == 0:
-        segments.append([line[0], line[-1]])
-    elif current_start != segments[-1][-1]:
-        segments.append([segments[-1][-1], line[-1]])
+        if len1 < 1e-6 or len2 < 1e-6:
+            current_segment.append(line[i])
+            continue
 
-    valid_segments = [seg for seg in segments if len(seg) >= 2]
+        vec1_norm = vec1 / len1
+        vec2_norm = vec2 / len2
+
+        dot_product = np.clip(np.dot(vec1_norm, vec2_norm), -1.0, 1.0)
+        angle = np.arccos(dot_product)
+
+        if angle > max_angle:
+            current_segment.append(line[i])
+            if len(current_segment) >= 2:
+                segments.append(current_segment)
+            current_segment = [line[i]]
+        else:
+            current_segment.append(line[i])
+
+    current_segment.append(line[-1])
+    if len(current_segment) >= 2:
+        segments.append(current_segment)
+
+    if not segments:
+        segments = [[line[0], line[-1]]]
 
     print(
-        f"Original line with {len(line)} points broken into {len(valid_segments)} straight segments"
+        f"Original line with {len(line)} points broken into {len(segments)} adaptive segments (max angle: {np.degrees(max_angle):.1f}°)"
     )
 
-    return valid_segments if valid_segments else [[line[0], line[-1]]]
+    return segments
 
 
 def process_image_for_edge_drawing(
