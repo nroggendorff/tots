@@ -212,6 +212,44 @@ def create_luminance_based_masks(img_array, color_sources, brush_px, threshold):
     return masks, active_colors
 
 
+def break_line_into_segments(line, max_segment_length):
+    if len(line) < 2:
+        return [line] if line else []
+
+    segments = []
+    current_segment = [line[0]]
+    current_length = 0
+
+    for i in range(1, len(line)):
+        prev_point = line[i - 1]
+        curr_point = line[i]
+
+        dx = curr_point[0] - prev_point[0]
+        dy = curr_point[1] - prev_point[1]
+        distance = (dx * dx + dy * dy) ** 0.5
+
+        current_length += distance
+        current_segment.append(curr_point)
+        if current_length >= max_segment_length:
+            if len(current_segment) >= 2:
+                segments.append(current_segment[:])
+            current_segment = [curr_point]
+            current_length = 0
+
+    if len(current_segment) >= 2:
+        segments.append(current_segment)
+    elif len(current_segment) == 1 and segments:
+        segments[-1].extend(current_segment)
+
+    valid_segments = [seg for seg in segments if len(seg) >= 2]
+
+    print(
+        f"Original line with {len(line)} points broken into {len(valid_segments)} segments"
+    )
+
+    return valid_segments if valid_segments else [line]
+
+
 def process_image_for_edge_drawing(
     img: Image.Image,
     region_w: int,
@@ -222,6 +260,8 @@ def process_image_for_edge_drawing(
     sampled_colors: dict = None,
     brightness_offset: int = 0,
     enable_fill: bool = False,
+    straight_lines_only: bool = False,
+    curve_resolution: int = 10,
 ):
     try:
         original_img = img.copy()
@@ -278,15 +318,45 @@ def process_image_for_edge_drawing(
         drawing_data = {}
 
         for color_name, mask in masks.items():
-            color_drawing_data = {"lines": [], "scribbles": []}
+            color_drawing_data = {"edge_lines": [], "fill_lines": []}
 
             edges = detect_edges(arr * mask.astype(float), threshold, brush_px)
             lines = trace_edge_lines(edges, min_line_length=max(3, brush_px // 2))
-            color_drawing_data["lines"] = lines
+
+            print(f"Original {color_name}: {len(lines)} lines")
+
+            if straight_lines_only:
+                print(
+                    f"Breaking lines into segments with max length: {curve_resolution}"
+                )
+                segmented_lines = []
+                for line_idx, line in enumerate(lines):
+                    segments = break_line_into_segments(line, curve_resolution)
+                    segmented_lines.extend(segments)
+                    if line_idx == 0:
+                        print(
+                            f"First line: {len(line)} points -> {len(segments)} segments"
+                        )
+                lines = segmented_lines
+                print(f"After segmentation {color_name}: {len(lines)} line segments")
+
+            color_drawing_data["edge_lines"] = lines
 
             if enable_fill:
                 scribbles = generate_fill_scribbles(mask, brush_px)
-                color_drawing_data["scribbles"] = scribbles
+                print(f"Original {color_name} fill: {len(scribbles)} scribbles")
+
+                if straight_lines_only:
+                    segmented_scribbles = []
+                    for scribble in scribbles:
+                        segments = break_line_into_segments(scribble, curve_resolution)
+                        segmented_scribbles.extend(segments)
+                    scribbles = segmented_scribbles
+                    print(
+                        f"After segmentation {color_name} fill: {len(scribbles)} scribble segments"
+                    )
+
+                color_drawing_data["fill_lines"] = scribbles
 
             drawing_data[color_name] = color_drawing_data
 

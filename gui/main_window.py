@@ -109,9 +109,29 @@ class DotDrawerApp(QWidget):
         controls_col1.addWidget(brush_label)
         controls_col1.addWidget(self.brush_spin)
 
-        self.enable_fill_checkbox = QCheckBox("Enable fill (scribbles)")
+        self.enable_fill_checkbox = QCheckBox("Enable fill")
         self.enable_fill_checkbox.stateChanged.connect(self._on_settings_changed)
         controls_col1.addWidget(self.enable_fill_checkbox)
+
+        self.straight_lines_checkbox = QCheckBox("Straight lines only")
+        self.straight_lines_checkbox.stateChanged.connect(
+            self._on_straight_lines_changed
+        )
+        controls_col1.addWidget(self.straight_lines_checkbox)
+
+        curve_res_label = QLabel("Curve resolution:")
+        curve_res_label.setObjectName("sectionLabel")
+        self.curve_resolution_slider = QSlider(Qt.Orientation.Horizontal)
+        self.curve_resolution_slider.setRange(3, 50)
+        self.curve_resolution_slider.setValue(10)
+        self.curve_resolution_slider.valueChanged.connect(self._on_settings_changed)
+        self.curve_resolution_slider.setEnabled(False)
+        controls_col1.addWidget(curve_res_label)
+        controls_col1.addWidget(self.curve_resolution_slider)
+
+        self.curve_res_info = QLabel("Resolution: 10 pixels per segment")
+        self.curve_res_info.setStyleSheet("color: #616161; font-size: 11px;")
+        controls_col1.addWidget(self.curve_res_info)
 
         region_btn = QPushButton("Select region")
         region_btn.clicked.connect(self.select_region)
@@ -182,6 +202,21 @@ class DotDrawerApp(QWidget):
 
         return controls
 
+    def _on_straight_lines_changed(self):
+        is_enabled = self.straight_lines_checkbox.isChecked()
+        self.curve_resolution_slider.setEnabled(is_enabled)
+        self._update_curve_resolution_info()
+        self._on_settings_changed()
+
+    def _update_curve_resolution_info(self):
+        if self.straight_lines_checkbox.isChecked():
+            res = self.curve_resolution_slider.value()
+            self.curve_res_info.setText(f"Resolution: {res} pixels per segment")
+            self.curve_res_info.setStyleSheet("color: #333; font-size: 11px;")
+        else:
+            self.curve_res_info.setText("Resolution: 10 pixels per segment")
+            self.curve_res_info.setStyleSheet("color: #616161; font-size: 11px;")
+
     def _pick_color_location(self, color_type):
         self.hide()
         QApplication.processEvents()
@@ -248,6 +283,8 @@ class DotDrawerApp(QWidget):
             brightness_offset = self.brightness_slider.value()
             brush_px = self.brush_spin.value()
             enable_fill = self.enable_fill_checkbox.isChecked()
+            straight_lines_only = self.straight_lines_checkbox.isChecked()
+            curve_resolution = self.curve_resolution_slider.value()
 
             target_w, target_h = (
                 (self.selected_region.w, self.selected_region.h)
@@ -265,6 +302,8 @@ class DotDrawerApp(QWidget):
                 self.sampled_colors,
                 brightness_offset,
                 enable_fill,
+                straight_lines_only,
+                curve_resolution,
             )
 
             if result is None:
@@ -310,7 +349,7 @@ class DotDrawerApp(QWidget):
             stages = [
                 (color_name, data)
                 for color_name, data in drawing_data.items()
-                if data["lines"] or data.get("scribbles", [])
+                if data["edge_lines"] or data.get("fill_lines", [])
             ]
 
             bg_color = None
@@ -318,7 +357,8 @@ class DotDrawerApp(QWidget):
             if stages:
                 most_common_stage = max(
                     stages,
-                    key=lambda s: len(s[1]["lines"]) + len(s[1].get("scribbles", [])),
+                    key=lambda s: len(s[1]["edge_lines"])
+                    + len(s[1].get("fill_lines", [])),
                 )
                 bg_color, bg_data = most_common_stage
                 stages = [(c, d) for (c, d) in stages if c != bg_color]
@@ -334,14 +374,14 @@ class DotDrawerApp(QWidget):
                 else:
                     preview_color = (0, 0, 0)
 
-                for line in data["lines"]:
+                for line in data["edge_lines"]:
                     if len(line) >= 2:
                         draw_line_preview(line, preview_color, line_thickness)
 
-                for scribble in data.get("scribbles", []):
-                    if len(scribble) >= 2:
+                for fill_line in data.get("fill_lines", []):
+                    if len(fill_line) >= 2:
                         draw_line_preview(
-                            scribble, preview_color, max(1, line_thickness // 2)
+                            fill_line, preview_color, max(1, line_thickness // 2)
                         )
 
             preview_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
@@ -380,6 +420,7 @@ class DotDrawerApp(QWidget):
             print(f"Error updating previews: {e}")
 
     def _on_settings_changed(self):
+        self._update_curve_resolution_info()
         self._update_dot_preview()
         self._update_all_previews()
 
@@ -529,6 +570,8 @@ class DotDrawerApp(QWidget):
         threshold = self.threshold_slider.value()
         brightness_offset = self.brightness_slider.value()
         enable_fill = self.enable_fill_checkbox.isChecked()
+        straight_lines_only = self.straight_lines_checkbox.isChecked()
+        curve_resolution = self.curve_resolution_slider.value()
 
         display_name = image_path.split("/")[-1] if "/" in image_path else image_path
 
@@ -559,6 +602,8 @@ class DotDrawerApp(QWidget):
                 self.sampled_colors,
                 brightness_offset,
                 enable_fill,
+                straight_lines_only,
+                curve_resolution,
             )
 
             bg_color_info = ""
@@ -569,14 +614,14 @@ class DotDrawerApp(QWidget):
                 stages = [
                     (color_name, data)
                     for color_name, data in drawing_data.items()
-                    if data["lines"] or data.get("scribbles", [])
+                    if data["edge_lines"] or data.get("fill_lines", [])
                 ]
 
                 if stages:
                     most_common_stage = max(
                         stages,
-                        key=lambda s: len(s[1]["lines"])
-                        + len(s[1].get("scribbles", [])),
+                        key=lambda s: len(s[1]["edge_lines"])
+                        + len(s[1].get("fill_lines", [])),
                     )
                     bg_color, bg_data = most_common_stage
 
@@ -584,24 +629,31 @@ class DotDrawerApp(QWidget):
                         bg_rgb = active_colors[bg_color]["rgb"]
                         bg_color_info = f"\nBackground color: {bg_color} (RGB{bg_rgb})"
 
-                total_lines = sum(len(data["lines"]) for data in drawing_data.values())
-                total_scribbles = sum(
-                    len(data.get("scribbles", [])) for data in drawing_data.values()
+                total_edge_lines = sum(
+                    len(data["edge_lines"]) for data in drawing_data.values()
                 )
-                total_elements_info = f"\nWill draw {total_lines} edge lines"
-                if enable_fill and total_scribbles > 0:
-                    total_elements_info += f" and {total_scribbles} fill scribbles"
+                total_fill_lines = sum(
+                    len(data.get("fill_lines", [])) for data in drawing_data.values()
+                )
+                total_elements_info = f"\nWill draw {total_edge_lines} edge lines"
+                if enable_fill and total_fill_lines > 0:
+                    total_elements_info += f" + {total_fill_lines} fill lines (overlay)"
 
         except Exception:
             bg_color_info = ""
             total_elements_info = ""
 
-        fill_status = " (with fill enabled)" if enable_fill else ""
+        fill_status = ""
+        straight_status = (
+            f" (straight lines, {curve_resolution}px segments)"
+            if straight_lines_only
+            else ""
+        )
 
         confirm = QMessageBox.question(
             self,
             "Confirm Drawing",
-            f"Draw image '{display_name}'{fill_status}?\n\n"
+            f"Draw image '{display_name}'{fill_status}{straight_status}?\n\n"
             f"Region: x={region.x}, y={region.y}, w={region.w}, h={region.h}\n"
             f"Line thickness: {brush_px}\n"
             f"Edge sensitivity: {threshold}\n"
@@ -624,5 +676,7 @@ class DotDrawerApp(QWidget):
             self.color_locations,
             brightness_offset,
             enable_fill,
+            straight_lines_only,
+            curve_resolution,
         )
         self._draw_thread.start()

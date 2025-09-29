@@ -19,6 +19,8 @@ class DrawingThread(threading.Thread):
         color_locations: dict = None,
         brightness_offset: int = 0,
         enable_fill: bool = False,
+        straight_lines_only: bool = False,
+        curve_resolution: int = 10,
     ):
         super().__init__()
         self.img = img.copy()
@@ -30,6 +32,8 @@ class DrawingThread(threading.Thread):
         self.color_locations = color_locations or {}
         self.brightness_offset = brightness_offset
         self.enable_fill = enable_fill
+        self.straight_lines_only = straight_lines_only
+        self.curve_resolution = curve_resolution
 
     def _click_color_location(self, color_type: str):
         location = self.color_locations.get(color_type)
@@ -54,23 +58,46 @@ class DrawingThread(threading.Thread):
             return
 
         try:
-            start_x, start_y = points[0]
-            pyautogui.moveTo(
-                self.region.x + start_x, self.region.y + start_y, duration=0.02
-            )
+            if self.straight_lines_only:
+                start_x, start_y = points[0]
+                end_x, end_y = points[-1]
 
-            pyautogui.mouseDown()
+                print(
+                    f"Drawing straight line: ({start_x},{start_y}) -> ({end_x},{end_y})"
+                )
 
-            for point in points[1:]:
-                if self.stop_flag.is_set():
-                    break
+                pyautogui.moveTo(
+                    self.region.x + start_x, self.region.y + start_y, duration=0.02
+                )
 
-                px, py = point
-                pyautogui.moveTo(self.region.x + px, self.region.y + py, duration=0.01)
-                time.sleep(0.005)
+                pyautogui.mouseDown()
 
-            pyautogui.mouseUp()
-            time.sleep(0.01)
+                pyautogui.moveTo(
+                    self.region.x + end_x, self.region.y + end_y, duration=0.1
+                )
+
+                pyautogui.mouseUp()
+                time.sleep(0.1)
+            else:
+                start_x, start_y = points[0]
+                pyautogui.moveTo(
+                    self.region.x + start_x, self.region.y + start_y, duration=0.02
+                )
+
+                pyautogui.mouseDown()
+
+                for point in points[1:]:
+                    if self.stop_flag.is_set():
+                        break
+
+                    px, py = point
+                    pyautogui.moveTo(
+                        self.region.x + px, self.region.y + py, duration=0.01
+                    )
+                    time.sleep(0.005)
+
+                pyautogui.mouseUp()
+                time.sleep(0.01)
 
         except pyautogui.FailSafeException:
             self.stop_flag.set()
@@ -91,6 +118,8 @@ class DrawingThread(threading.Thread):
                 None,
                 self.brightness_offset,
                 self.enable_fill,
+                self.straight_lines_only,
+                self.curve_resolution,
             )
 
             if result is None:
@@ -99,8 +128,15 @@ class DrawingThread(threading.Thread):
 
             img_resized, drawing_data, active_colors = result
 
+            print(f"Straight lines mode: {self.straight_lines_only}")
+            print(f"Curve resolution: {self.curve_resolution}")
+            for color_name, data in drawing_data.items():
+                edge_count = len(data["edge_lines"])
+                fill_count = len(data.get("fill_lines", []))
+                print(f"{color_name}: {edge_count} edge lines, {fill_count} fill lines")
+
             if not any(
-                data["lines"] or data.get("scribbles", [])
+                data["edge_lines"] or data.get("fill_lines", [])
                 for data in drawing_data.values()
             ):
                 QApplication.beep()
@@ -120,7 +156,7 @@ class DrawingThread(threading.Thread):
             drawing_stages = [
                 (color_name, data)
                 for color_name, data in drawing_data.items()
-                if data["lines"] or data.get("scribbles", [])
+                if data["edge_lines"] or data.get("fill_lines", [])
             ]
 
             bg_color = None
@@ -128,12 +164,13 @@ class DrawingThread(threading.Thread):
             if drawing_stages:
                 most_common_stage = max(
                     drawing_stages,
-                    key=lambda s: len(s[1]["lines"]) + len(s[1].get("scribbles", [])),
+                    key=lambda s: len(s[1]["edge_lines"])
+                    + len(s[1].get("fill_lines", [])),
                 )
                 bg_color, bg_data = most_common_stage
                 print(
                     f"Setting background color to '{bg_color}' "
-                    f"({len(bg_data['lines'])} lines, {len(bg_data.get('scribbles', []))} scribbles) "
+                    f"({len(bg_data['edge_lines'])} edge lines, {len(bg_data.get('fill_lines', []))} fill lines) "
                     f"and skipping that stage"
                 )
                 self._click_color_location(bg_color)
@@ -142,7 +179,7 @@ class DrawingThread(threading.Thread):
                 ]
 
             total_elements = sum(
-                len(data["lines"]) + len(data.get("scribbles", []))
+                len(data["edge_lines"]) + len(data.get("fill_lines", []))
                 for _, data in drawing_stages
             )
             elements_drawn = 0
@@ -151,11 +188,11 @@ class DrawingThread(threading.Thread):
                 if self.stop_flag.is_set():
                     break
 
-                lines = data["lines"]
-                scribbles = data.get("scribbles", [])
+                edge_lines = data["edge_lines"]
+                fill_lines = data.get("fill_lines", [])
 
                 print(
-                    f"Starting {color_type} stage with {len(lines)} lines and {len(scribbles)} scribbles"
+                    f"Starting {color_type} stage with {len(edge_lines)} edge lines and {len(fill_lines)} fill lines"
                 )
 
                 self._click_color_location(color_type)
@@ -164,7 +201,7 @@ class DrawingThread(threading.Thread):
                 if self.stop_flag.is_set():
                     break
 
-                for idx, line in enumerate(lines):
+                for idx, line in enumerate(edge_lines):
                     if self.stop_flag.is_set():
                         break
 
@@ -176,14 +213,14 @@ class DrawingThread(threading.Thread):
 
                     if elements_drawn % 25 == 0:
                         print(
-                            f"Progress: {elements_drawn}/{total_elements} elements ({color_type} stage)"
+                            f"Progress: {elements_drawn}/{total_elements} elements ({color_type} edge lines)"
                         )
 
-                for idx, scribble in enumerate(scribbles):
+                for idx, fill_line in enumerate(fill_lines):
                     if self.stop_flag.is_set():
                         break
 
-                    self._draw_line(scribble)
+                    self._draw_line(fill_line)
                     elements_drawn += 1
 
                     if idx % 20 == 0:
@@ -191,7 +228,7 @@ class DrawingThread(threading.Thread):
 
                     if elements_drawn % 25 == 0:
                         print(
-                            f"Progress: {elements_drawn}/{total_elements} elements ({color_type} stage)"
+                            f"Progress: {elements_drawn}/{total_elements} elements ({color_type} fill lines)"
                         )
 
                 print(f"Completed {color_type} stage")
