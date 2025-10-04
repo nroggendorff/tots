@@ -352,19 +352,7 @@ class DotDrawerApp(QWidget):
                 if data["edge_lines"] or data.get("fill_lines", [])
             ]
 
-            bg_color = None
             bg_rgb = (255, 255, 255)
-            if stages:
-                most_common_stage = max(
-                    stages,
-                    key=lambda s: len(s[1]["edge_lines"])
-                    + len(s[1].get("fill_lines", [])),
-                )
-                bg_color, bg_data = most_common_stage
-                stages = [(c, d) for (c, d) in stages if c != bg_color]
-
-                if bg_color in active_colors:
-                    bg_rgb = active_colors[bg_color]["rgb"]
 
             line_thickness = max(1, brush_px // 4)
 
@@ -606,28 +594,9 @@ class DotDrawerApp(QWidget):
                 segments_per_circle,
             )
 
-            bg_color_info = ""
             total_elements_info = ""
             if result is not None:
                 img_resized, drawing_data, active_colors = result
-
-                stages = [
-                    (color_name, data)
-                    for color_name, data in drawing_data.items()
-                    if data["edge_lines"] or data.get("fill_lines", [])
-                ]
-
-                if stages:
-                    most_common_stage = max(
-                        stages,
-                        key=lambda s: len(s[1]["edge_lines"])
-                        + len(s[1].get("fill_lines", [])),
-                    )
-                    bg_color, bg_data = most_common_stage
-
-                    if bg_color in active_colors:
-                        bg_rgb = active_colors[bg_color]["rgb"]
-                        bg_color_info = f"\nBackground color: {bg_color} (RGB{bg_rgb})"
 
                 total_edge_lines = sum(
                     len(data["edge_lines"]) for data in drawing_data.values()
@@ -637,10 +606,9 @@ class DotDrawerApp(QWidget):
                 )
                 total_elements_info = f"\nWill draw {total_edge_lines} edge lines"
                 if enable_fill and total_fill_lines > 0:
-                    total_elements_info += f" + {total_fill_lines} fill lines (overlay)"
+                    total_elements_info += f" + {total_fill_lines} fill lines"
 
         except Exception:
-            bg_color_info = ""
             total_elements_info = ""
 
         fill_status = ""
@@ -658,7 +626,7 @@ class DotDrawerApp(QWidget):
             f"Line thickness: {brush_px}\n"
             f"Edge sensitivity: {threshold}\n"
             f"Brightness offset: {brightness_offset}"
-            f"{color_info}{bg_color_info}{total_elements_info}",
+            f"{color_info}{total_elements_info}",
         )
 
         if confirm != QMessageBox.StandardButton.Yes:

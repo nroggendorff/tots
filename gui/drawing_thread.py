@@ -159,25 +159,6 @@ class DrawingThread(threading.Thread):
                 if data["edge_lines"] or data.get("fill_lines", [])
             ]
 
-            bg_color = None
-            bg_data = None
-            if drawing_stages:
-                most_common_stage = max(
-                    drawing_stages,
-                    key=lambda s: len(s[1]["edge_lines"])
-                    + len(s[1].get("fill_lines", [])),
-                )
-                bg_color, bg_data = most_common_stage
-                print(
-                    f"Setting background color to '{bg_color}' "
-                    f"({len(bg_data['edge_lines'])} edge lines, {len(bg_data.get('fill_lines', []))} fill lines) "
-                    f"and skipping that stage"
-                )
-                self._click_color_location(bg_color)
-                drawing_stages = [
-                    (c, data) for (c, data) in drawing_stages if c != bg_color
-                ]
-
             total_elements = sum(
                 len(data["edge_lines"]) + len(data.get("fill_lines", []))
                 for _, data in drawing_stages
